@@ -14,7 +14,7 @@
 // Protocol: POST with JSON body  {"cmd": "<command>", "args": {...}}
 // Response: JSON {"ok": true, "data": ...} or {"ok": false, "error": "..."}
 
-var VERSION = "0.4.0";
+var VERSION = "0.4.1";
 
 var FairyGUI = CS.FairyGUI;
 var FairyEditor = CS.FairyEditor;
@@ -504,7 +504,17 @@ COMMANDS.set_gear = function (a) {
         pages: pagesAttr(a.pages),
         values: valueAttr
     }, true);
-    target.docElement.UpdateGears(editorXml("<root>" + gearXml + "</root>"));
+    // UpdateGears wants the gear tag as the root. It can return ok without
+    // writing the element, so also ReadGears from a parent node and save.
+    var gearNode = editorXml(gearXml);
+    if (target.docElement != null) {
+        try { target.docElement.UpdateGears(gearNode); } catch (eGear) {
+            plog("UpdateGears " + tag + ": " + eGear);
+        }
+    }
+    var holder = FairyGUI.Utils.XML.Create("holder");
+    holder.AppendChild(editorXml(gearXml));
+    target.ReadGears(holder);
     try { opened.doc.SetModified(true); } catch (e2) { }
     App.docView.SaveDocument(opened.doc);
     return ok({ target: a.target, gear: gear, controller: a.controller });
@@ -594,9 +604,61 @@ function editorXml(s) {
 }
 
 function createOnDoc(doc, tag, attrs, inner) {
-    var xml = inner ? (tagXml(tag, attrs, false) + inner + "</" + tag + ">") : tagXml(tag, attrs, true);
-    var obj = doc.content.CreateChild(editorXml(xml));
-    if (obj == null) throw "CreateChild returned null for <" + tag + ">";
+    if (!attrs) attrs = {};
+    if (!attrs.id) {
+        try { attrs.id = doc.content.GetNextId(); } catch (e) {
+            throw "GetNextId failed before CreateChild <" + tag + ">: " + e;
+        }
+    }
+    // Prefer XML.Create + SetAttribute. Parsing a raw string via new XML(s) can
+    // yield a node CreateChild accepts but does not parent (empty name, no child).
+    var xmlNode = null;
+    try {
+        xmlNode = FairyGUI.Utils.XML.Create(String(tag));
+        for (var k in attrs) {
+            if (attrs[k] === undefined || attrs[k] === null || attrs[k] === "") continue;
+            xmlNode.SetAttribute(k, String(attrs[k]));
+        }
+        if (inner) {
+            // list items etc: parse fragment children onto the node
+            var wrap = editorXml("<wrap>" + inner + "</wrap>");
+            var kids = wrap.Elements();
+            if (kids != null) {
+                var en = kids.GetEnumerator();
+                while (en.MoveNext()) xmlNode.AppendChild(en.Current);
+            }
+        }
+    } catch (eCreate) {
+        plog("XML.Create path failed, fallback string: " + eCreate);
+        var xmlStr = inner ? (tagXml(tag, attrs, false) + inner + "</" + tag + ">") : tagXml(tag, attrs, true);
+        xmlNode = editorXml(xmlStr);
+    }
+    plog("CreateChild tag=" + tag + " id=" + attrs.id + " name=" + (attrs.name || ""));
+    var obj = doc.content.CreateChild(xmlNode);
+    if (obj != null && !obj.name) {
+        try { doc.content.RemoveChild(obj, true); } catch (eRm) { }
+        obj = null;
+    }
+    if (obj == null || !obj.name) {
+        // CreateChild returns an unnamed object that never enters displayList.
+        // Factory + AddChild is the path that actually serializes.
+        try {
+            var pkgItem = doc.packageItem;
+            var pkg = pkgItem != null ? pkgItem.owner : null;
+            if (pkg == null) throw "no package on document";
+            obj = FairyEditor.FObjectFactory.CreateObject(pkg, fobjectType(tag));
+            if (obj == null) throw "FObjectFactory.CreateObject returned null";
+            doc.content.AddChild(obj);
+            attachDocElement(doc, obj);
+            applyChildAttrs(obj, attrs);
+            plog("CreateChild fallback factory ok name=" + obj.name);
+        } catch (eFall) {
+            throw "CreateChild failed for <" + tag + "> and factory fallback failed: " + eFall;
+        }
+    }
+    try { doc.content.UpdateDisplayList(true); } catch (e2) { }
+    try { doc.content.ValidateChildren(false); } catch (e3) { }
+    if (!obj.name) throw "CreateChild/factory produced unnamed object for <" + tag + ">";
     return obj;
 }
 
@@ -690,39 +752,125 @@ function findChild(content, target) {
 }
 
 function setOneProp(obj, k, v) {
-    try {
-        obj.docElement.SetProperty(k, v);
-        return "set";
-    } catch (e1) {
+    if (obj.docElement != null) {
         try {
-            // extention props (title/icon/... on Button/Label/ProgressBar
-            // extention components) live on a separate setter
-            obj.docElement.SetExtensionProperty(k, v);
-            return "ext";
-        } catch (e2) {
-            // vector-like editor xml attrs may map to scalar props
-            if (typeof v === "string" && v.indexOf(",") >= 0) {
-                var parts = v.split(",");
-                var x = parseInt(parts[0], 10), y = parseInt(parts[1], 10);
-                if (k === "size") {
-                    obj.docElement.SetProperty("width", x);
-                    obj.docElement.SetProperty("height", y);
-                    return "w/h";
-                }
-                if (k === "xy") {
-                    obj.docElement.SetProperty("x", x);
-                    obj.docElement.SetProperty("y", y);
-                    return "x/y";
-                }
-                if (k === "pivot" || k === "anchor" || k === "scale") {
-                    obj.docElement.SetProperty(k + "X", x);
-                    obj.docElement.SetProperty(k + "Y", y);
-                    return k + "X/" + k + "Y";
-                }
-            }
-            throw e2;
+            obj.docElement.SetProperty(k, String(v));
+            return "set";
+        } catch (e1) {
+            try {
+                obj.docElement.SetExtensionProperty(k, String(v));
+                return "ext";
+            } catch (e2) { /* direct assignment below */ }
         }
     }
+    return setDirectProp(obj, k, v);
+}
+
+function setDirectProp(obj, k, v) {
+    if (k === "xy" && typeof v === "string" && v.indexOf(",") >= 0) {
+        var xy = v.split(",");
+        obj.x = parseFloat(xy[0]) || 0;
+        obj.y = parseFloat(xy[1]) || 0;
+        return "x/y";
+    }
+    if (k === "size" && typeof v === "string" && v.indexOf(",") >= 0) {
+        lockSize(obj, v);
+        return "w/h";
+    }
+    if (k === "color" || k === "titleColor") {
+        obj.color = unityColor(v);
+        return "color";
+    }
+    if (k === "strokeColor") {
+        obj.stroke = true;
+        obj.strokeColor = unityColor(v);
+        return "color";
+    }
+    if (k === "strokeSize") {
+        obj.stroke = true;
+        obj.strokeSize = parseFloat(v) || 0;
+        return "strokeSize";
+    }
+    if (k === "fontSize" || k === "lineGap" || k === "colGap" || k === "lineItemCount") {
+        obj[k] = parseFloat(v) || 0;
+        return k;
+    }
+    if (k === "bold" || k === "singleLine" || k === "stroke") {
+        obj[k] = v === true || v === "true";
+        return k;
+    }
+    obj[k] = v;
+    return "field";
+}
+
+function fobjectType(tag) {
+    var type = String(tag);
+    if (type === "richtext") return FairyEditor.FObjectType.RICHTEXT;
+    if (type === "text") return FairyEditor.FObjectType.TEXT;
+    if (type === "loader") return FairyEditor.FObjectType.LOADER;
+    if (type === "list") return FairyEditor.FObjectType.LIST;
+    if (type === "graph") return FairyEditor.FObjectType.GRAPH;
+    return type;
+}
+
+function attachDocElement(doc, obj) {
+    try {
+        if (obj.docElement != null) return;
+        obj._docElement = new FairyEditor.View.DocElement(doc, obj, false);
+    } catch (e) {
+        plog("docElement attach skipped: " + e);
+    }
+}
+
+function unityColor(c) {
+    var s = String(c).replace("#", "");
+    if (s.length < 6) throw "bad color " + c;
+    var rgb = parseInt(s.substring(0, 6), 16);
+    try { return FairyGUI.Utils.ToolSet.ColorFromRGB(rgb); } catch (e) { }
+    return new CS.UnityEngine.Color(
+        parseInt(s.substring(0, 2), 16) / 255,
+        parseInt(s.substring(2, 4), 16) / 255,
+        parseInt(s.substring(4, 6), 16) / 255,
+        1);
+}
+
+function lockSize(obj, sizeText) {
+    var wh = String(sizeText).split(",");
+    var w = parseFloat(wh[0]);
+    var h = parseFloat(wh[1]);
+    try { obj.autoSize = "none"; } catch (e) { }
+    obj.width = w;
+    obj.height = h;
+    try { obj.initWidth = w; obj.initHeight = h; } catch (e2) { }
+}
+
+function applyChildAttrs(obj, attrs) {
+    if (attrs.name) obj.name = String(attrs.name);
+    if (attrs.id) { try { obj.id = String(attrs.id); } catch (eId) { } }
+    if (attrs.autoSize) { try { obj.autoSize = String(attrs.autoSize); } catch (eAs) { } }
+    else if (attrs.size) { try { obj.autoSize = "none"; } catch (eAs2) { } }
+    if (attrs.singleLine === "true") { try { obj.singleLine = true; } catch (eSl) { } }
+    if (attrs.bold === "true") { try { obj.bold = true; } catch (eB) { } }
+    if (attrs.text != null) obj.text = String(attrs.text);
+    if (attrs.fontSize != null) obj.fontSize = parseFloat(attrs.fontSize) || obj.fontSize;
+    if (attrs.color) obj.color = unityColor(attrs.color);
+    if (attrs.strokeColor || attrs.strokeSize != null) {
+        obj.stroke = true;
+        if (attrs.strokeColor) obj.strokeColor = unityColor(attrs.strokeColor);
+        if (attrs.strokeSize != null) obj.strokeSize = parseFloat(attrs.strokeSize) || 0;
+    }
+    if (attrs.align) { try { obj.align = String(attrs.align); } catch (eA) { } }
+    if (attrs.vAlign) { try { obj.verticalAlign = String(attrs.vAlign); } catch (eV) { } }
+    if (attrs.xy) setDirectProp(obj, "xy", attrs.xy);
+    if (attrs.size) lockSize(obj, attrs.size);
+    if (attrs.url) { try { obj.url = String(attrs.url); } catch (eU) { } }
+    if (attrs.defaultItem) obj.defaultItem = String(attrs.defaultItem);
+    if (attrs.layout) obj.layout = String(attrs.layout);
+    if (attrs.lineGap != null) obj.lineGap = parseFloat(attrs.lineGap) || 0;
+    if (attrs.colGap != null) obj.colGap = parseFloat(attrs.colGap) || 0;
+    if (attrs.lineItemCount != null) obj.lineItemCount = parseFloat(attrs.lineItemCount) || 0;
+    if (attrs.overflow) { try { obj.overflow = String(attrs.overflow); } catch (eO) { } }
+    if (attrs.fill) { try { obj.fill = String(attrs.fill); } catch (eF) { } }
 }
 
 function applyProps(obj, props) {
@@ -808,6 +956,7 @@ function registryRegister(port) {
     var arr = registryRead().filter(function (e) { return e.port !== port; });
     var entry = {
         port: port,
+        url: "http://127.0.0.1:" + port + "/",
         project: projectLabel(),
         projectPath: projectDirectory(),
         startedAt: new Date().toISOString()
@@ -856,17 +1005,23 @@ function startServer() {
     for (var port = wanted; port < wanted + maxTries; port++) {
         try {
             var listener = new CS.System.Net.HttpListener();
-            listener.Prefixes.Add("http://localhost:" + port + "/");
+            // Prefer 127.0.0.1 on Windows: "localhost" often binds [::1] only,
+            // while Node/MCP clients dial 127.0.0.1 or hang on IPv6 Happy Eyeballs.
+            // Do not also bind "localhost": on Windows that prefix is IPv6-only and,
+            // together with 127.0.0.1, makes discover_projects report the same project twice.
+            listener.Prefixes.Add("http://127.0.0.1:" + port + "/");
             listener.Start();
             Bridge.listener = listener;
             Bridge.port = port;
             Bridge.pendingAccept = listener.BeginGetContext(null, null);
+            Bridge.tickCount = 0;
             var entry = registryRegister(port);
-            plog("listening on http://localhost:" + port + "/ v" + VERSION
+            plog("listening on http://127.0.0.1:" + port + "/ v" + VERSION
                 + (port !== wanted ? " (default port busy, auto-picked)" : ""));
             return true;
         } catch (e) {
             // port busy or listener error - try the next port
+            plog("listen try " + port + " failed: " + e);
         }
     }
     plog("FAILED to start http listener on ports " + wanted + ".." + (wanted + maxTries - 1));
@@ -984,9 +1139,21 @@ function stepQueue() {
 }
 
 function onUpdate() {
-    if (Bridge.listener == null) return;
-    pumpAccepts();
-    stepQueue();
+    try {
+        try { CS.UnityEngine.Application.runInBackground = true; } catch (eBg) { }
+        if (Bridge.listener == null) return;
+        Bridge.tickCount = (Bridge.tickCount || 0) + 1;
+        if (Bridge.tickCount === 1 || Bridge.tickCount % 300 === 0) {
+            plog("onUpdate tick=" + Bridge.tickCount
+                + " pending=" + (Bridge.pendingAccept != null)
+                + " completed=" + (Bridge.pendingAccept != null && Bridge.pendingAccept.IsCompleted)
+                + " queue=" + Bridge.queue.length);
+        }
+        pumpAccepts();
+        stepQueue();
+    } catch (eUp) {
+        plog("onUpdate error: " + eUp);
+    }
 }
 
 function boot() {
@@ -994,6 +1161,16 @@ function boot() {
     // window loses focus or is minimized - without this Unity pauses
     try { CS.UnityEngine.Application.runInBackground = true; } catch (e) {
         plog("runInBackground not settable: " + e);
+    }
+    // Re-assert before the player loop pauses. Setting it only at boot is too late
+    // if the host clears the flag when the window loses focus.
+    try {
+        CS.UnityEngine.Application.add_focusChanged(function (focused) {
+            try { CS.UnityEngine.Application.runInBackground = true; } catch (eF) { }
+            plog("focusChanged focused=" + focused);
+        });
+    } catch (eFocus) {
+        plog("focusChanged hook skipped: " + eFocus);
     }
     if (App.project != null) {
         startServer();

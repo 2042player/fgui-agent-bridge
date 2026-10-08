@@ -331,7 +331,7 @@ rl.on("line", async (line) => {
                 result: {
                     protocolVersion: "2024-11-05",
                     capabilities: { tools: {} },
-                    serverInfo: { name: "fgui-agent-bridge", version: "0.4.0" },
+                    serverInfo: { name: "fgui-agent-bridge", version: "0.4.1" },
                 },
             });
         } else if (req.method === "tools/list") {

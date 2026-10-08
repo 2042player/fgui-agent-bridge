@@ -17,7 +17,7 @@ export async function request(url, cmd, args = {}, timeout = 5000) {
     if (!r.ok) throw new Error(`Bridge HTTP ${r.status}`);
     return r.json();
 }
-export async function discover({entries, fallback = process.env.FGUI_BRIDGE_URL || 'http://localhost:7531/'} = {}) {
+export async function discover({entries, fallback = process.env.FGUI_BRIDGE_URL || 'http://127.0.0.1:7531/'} = {}) {
     if (!entries) {
         entries = [];
         try { entries.push(...JSON.parse(fs.readFileSync(path.join(registryDir, 'registry.json'), 'utf8'))); } catch {}
@@ -26,7 +26,7 @@ export async function discover({entries, fallback = process.env.FGUI_BRIDGE_URL 
                 if (file.endsWith('.json')) try { entries.push(JSON.parse(fs.readFileSync(path.join(registryDir, 'instances', file), 'utf8'))); } catch {}
         } catch {}
     }
-    const urls = new Map(entries.map(e => [e.url || `http://localhost:${e.port}/`, e]));
+    const urls = new Map(entries.map(e => [e.url || `http://127.0.0.1:${e.port}/`, e]));
     if (fallback && !urls.has(fallback)) urls.set(fallback, {});
     const results = await Promise.allSettled([...urls].map(async ([url, e]) => {
         const ping = await request(url, 'ping');
@@ -45,7 +45,17 @@ export async function discover({entries, fallback = process.env.FGUI_BRIDGE_URL 
             projectPath,
             packageNames: info.data.packageNames || []};
     }));
-    return results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
+    return dedupeInstances(results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value));
+}
+function dedupeInstances(list) {
+    const byKey = new Map();
+    const prefer = (url) => { try { return new URL(url).hostname === '127.0.0.1'; } catch { return false; } };
+    for (const item of list) {
+        const key = (item.projectPath ? normalizeProject(item.projectPath) : item.project || '') + '#' + item.port;
+        const prev = byKey.get(key);
+        if (!prev || (prefer(item.url) && !prefer(prev.url))) byKey.set(key, item);
+    }
+    return [...byKey.values()];
 }
 export function selectInstance(instances, selector = {}) {
     let candidates = instances;
@@ -63,7 +73,7 @@ export function selectInstance(instances, selector = {}) {
     return candidates[0];
 }
 export async function route(selector = {}) {
-    const explicit = selector.bridge_url || (selector.port !== undefined ? `http://localhost:${selector.port}/` : null);
+    const explicit = selector.bridge_url || (selector.port !== undefined ? `http://127.0.0.1:${selector.port}/` : null);
     const instances = await discover({fallback: explicit || process.env.FGUI_BRIDGE_URL || undefined});
     // Explicit env preserves compatibility; project checks still apply.
     return selectInstance(instances, {...selector, bridge_url: explicit || (!selector.project ? process.env.FGUI_BRIDGE_URL : undefined)});

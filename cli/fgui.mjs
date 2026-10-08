@@ -15,7 +15,7 @@
 import process from "node:process";
 import { discover, route, request, stripSelector } from './instances.mjs';
 
-const BASE = process.env.FGUI_BRIDGE_URL || "http://localhost:7531/";
+const BASE = process.env.FGUI_BRIDGE_URL || "http://127.0.0.1:7531/";
 
 const [cmd, ...rest] = process.argv.slice(2);
 
