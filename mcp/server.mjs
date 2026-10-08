@@ -233,6 +233,26 @@ const TOOLS = {
             ["pkg", "name"],
         ),
     },
+    set_image_scale9: {
+        description:
+            "Mark a library image as a 9-slice. scale9grid is the center rectangle " +
+            "left,top,width,height in source pixels. Omit it to slice the image into thirds. " +
+            "If the image is already 9-slice, the existing grid is kept unless overwrite is true. " +
+            "This edits the package image resource, not a sprite placed on a component.",
+        inputSchema: obj(
+            {
+                pkg: { type: S("string") },
+                name: { type: S("string"), description: "image resource name, e.g. popup_bg.png" },
+                scale9grid: { type: S("string"), description: "left,top,width,height" },
+                left: { type: S("number") },
+                top: { type: S("number") },
+                width: { type: S("number"), description: "center width, not the placed width" },
+                height: { type: S("number"), description: "center height, not the placed height" },
+                overwrite: { type: S("boolean") },
+            },
+            ["pkg", "name"],
+        ),
+    },
     set_property: {
         description:
             "Set properties of a child inside a component via editor API (undo-aware). " +

@@ -14,7 +14,7 @@
 // Protocol: POST with JSON body  {"cmd": "<command>", "args": {...}}
 // Response: JSON {"ok": true, "data": ...} or {"ok": false, "error": "..."}
 
-var VERSION = "0.4.1";
+var VERSION = "0.4.2";
 
 var FairyGUI = CS.FairyGUI;
 var FairyEditor = CS.FairyEditor;
@@ -332,6 +332,135 @@ COMMANDS.delete_item = function (a) {
     pkg.Save();
     return ok({ deleted: a.name });
 };
+
+// Mark a library image as 9-slice. scale9grid is the center rectangle
+// "left,top,width,height" in source pixels, the same attribute package.xml stores.
+COMMANDS.set_image_scale9 = function (a) {
+    var pkg = getPkg(a.pkg);
+    var item = findItem(pkg, a.name);
+    if (item == null && a.name) item = findItem(pkg, String(a.name).replace(/\.png$/i, "") + ".png");
+    if (item == null) throw "image not found in package '" + pkg.name + "': " + a.name;
+    if (String(item.type).toLowerCase() !== "image") throw "not an image: " + item.name + " (" + item.type + ")";
+    var xmlPath = packageXmlPath(pkg);
+    var xml = CS.System.IO.File.ReadAllText(xmlPath);
+    var current = readImageScale(xml, item.id);
+    if (current == null) throw "image id " + item.id + " not found in package.xml";
+    if (current.scale === "9grid" && current.scale9grid && a.overwrite !== true) {
+        return ok({
+            id: item.id,
+            name: item.name,
+            scale: "9grid",
+            scale9grid: current.scale9grid,
+            already: true
+        });
+    }
+    var size = imagePixelSize(item);
+    var grid = resolveScale9Grid(a, size.width, size.height);
+    var scale9 = grid.left + "," + grid.top + "," + grid.width + "," + grid.height;
+    trySetImageScale9Memory(item, grid);
+    xml = upsertImageScale9(xml, item.id, scale9);
+    writeUtf8(xmlPath, xml);
+    try { App.RefreshProject(); } catch (e) { plog("RefreshProject after scale9: " + e); }
+    return ok({
+        id: item.id,
+        name: item.name,
+        width: size.width,
+        height: size.height,
+        scale: "9grid",
+        scale9grid: scale9,
+        already: false
+    });
+};
+
+function packageXmlPath(pkg) {
+    var base = String(pkg.basePath || "").replace(/\\/g, "/");
+    if (base.charAt(base.length - 1) === "/") base = base.slice(0, -1);
+    return base + "/package.xml";
+}
+
+function imageTag(xml, id) {
+    var re = new RegExp("<image\\b[^>]*\\bid=\"" + id + "\"[^>]*\\/?>");
+    var m = re.exec(xml);
+    return m ? m[0] : null;
+}
+
+function readImageScale(xml, id) {
+    var tag = imageTag(xml, id);
+    if (tag == null) return null;
+    var scale = /\bscale="([^"]*)"/.exec(tag);
+    var grid = /\bscale9grid="([^"]*)"/.exec(tag);
+    return { scale: scale ? scale[1] : "", scale9grid: grid ? grid[1] : "" };
+}
+
+function upsertImageScale9(xml, id, scale9) {
+    var tag = imageTag(xml, id);
+    if (tag == null) throw "image id " + id + " not found in package.xml";
+    var at = xml.indexOf(tag);
+    var next = tag.replace(/\s+\bscale="[^"]*"/, "").replace(/\s+\bscale9grid="[^"]*"/, "");
+    var attrs = " scale=\"9grid\" scale9grid=\"" + scale9 + "\"";
+    if (/\/>$/.test(next)) next = next.replace(/\s*\/>$/, attrs + "/>");
+    else next = next.replace(/>$/, attrs + ">");
+    return xml.slice(0, at) + next + xml.slice(at + tag.length);
+}
+
+function imagePixelSize(item) {
+    var w = item.width | 0;
+    var h = item.height | 0;
+    if (w > 0 && h > 0) return { width: w, height: h };
+    if (!item.file) throw "image has no pixel size: " + item.name;
+    var bytes = CS.System.IO.File.ReadAllBytes(String(item.file));
+    if (bytes.Length < 24) throw "image file is not a readable png: " + item.name;
+    function u32(o) {
+        return ((bytes.get_Item(o) & 255) * 16777216) + ((bytes.get_Item(o + 1) & 255) * 65536)
+            + ((bytes.get_Item(o + 2) & 255) * 256) + (bytes.get_Item(o + 3) & 255);
+    }
+    w = u32(16);
+    h = u32(20);
+    if (!(w > 0 && h > 0)) throw "could not read png size: " + item.name;
+    return { width: w, height: h };
+}
+
+function resolveScale9Grid(a, imgW, imgH) {
+    var left, top, width, height;
+    if (a.scale9grid) {
+        var p = String(a.scale9grid).split(",");
+        if (p.length !== 4) throw "scale9grid must be left,top,width,height";
+        left = parseInt(p[0], 10);
+        top = parseInt(p[1], 10);
+        width = parseInt(p[2], 10);
+        height = parseInt(p[3], 10);
+    } else if (a.left !== undefined || a.top !== undefined || a.width !== undefined || a.height !== undefined) {
+        left = a.left | 0;
+        top = a.top | 0;
+        width = a.width | 0;
+        height = a.height | 0;
+    } else {
+        left = Math.max(1, Math.floor(imgW / 3));
+        top = Math.max(1, Math.floor(imgH / 3));
+        width = imgW - left * 2;
+        height = imgH - top * 2;
+    }
+    if (!(width > 0 && height > 0)) throw "scale9 center must be at least 1x1";
+    if (left < 0 || top < 0 || left + width > imgW || top + height > imgH) {
+        throw "scale9grid " + left + "," + top + "," + width + "," + height + " is outside " + imgW + "x" + imgH;
+    }
+    return { left: left, top: top, width: width, height: height };
+}
+
+function trySetImageScale9Memory(item, grid) {
+    var rect = null;
+    try { rect = new CS.UnityEngine.Rect(grid.left, grid.top, grid.width, grid.height); } catch (e) { rect = null; }
+    if (rect == null) return;
+    try { item.scale9Grid = rect; } catch (e1) { }
+    try { item.scaleOption = 1; } catch (e2) { }
+    try {
+        var asset = item.GetAsset();
+        if (asset != null) {
+            try { asset.scale9Grid = rect; } catch (e3) { }
+            try { asset.scale = "9grid"; } catch (e4) { }
+        }
+    } catch (e5) { }
+}
 
 COMMANDS.open_doc = function (a) {
     var pkg = getPkg(a.pkg);
