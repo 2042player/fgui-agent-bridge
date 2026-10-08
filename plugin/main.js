@@ -14,7 +14,7 @@
 // Protocol: POST with JSON body  {"cmd": "<command>", "args": {...}}
 // Response: JSON {"ok": true, "data": ...} or {"ok": false, "error": "..."}
 
-var VERSION = "0.2.0";
+var VERSION = "0.3.0";
 
 var FairyGUI = CS.FairyGUI;
 var FairyEditor = CS.FairyEditor;
@@ -130,9 +130,14 @@ function itemInfo(pkg, item, depth) {
     try { o.file = item.file; } catch (e) { }
     if (depth > 0) {
         o.children = [];
-        var ch = item.children;
-        for (var i = 0; i < ch.Count; i++) {
-            o.children.push(itemInfo(pkg, ch.get_Item(i), depth - 1));
+        var ch = null;
+        try { ch = item.children; } catch (e) { ch = null; }
+        if (ch != null) {
+            var n = 0;
+            try { n = ch.Count; } catch (e2) { n = 0; }
+            for (var i = 0; i < n; i++) {
+                o.children.push(itemInfo(pkg, ch.get_Item(i), depth - 1));
+            }
         }
     }
     return o;
@@ -213,6 +218,112 @@ COMMANDS.create_component = function (a) {
     var opened = ensureDocOpen(pkg, it.name);
     return ok({ id: it.id, name: it.name, url: opened.url, file: it.file, openable: true });
 };
+
+COMMANDS.create_package = function (a) {
+    if (App.project == null) throw "no project open";
+    var name = a.name ? String(a.name) : "";
+    if (!name) throw "args.name required";
+    if (App.project.GetPackageByName(name) != null) throw "package already exists: " + name;
+    var pkg = App.project.CreatePackage(name);
+    if (pkg == null) throw "CreatePackage returned null for " + name;
+    App.project.Save();
+    try { if (!pkg.opened) pkg.EnsureOpen(); } catch (e) { plog("EnsureOpen(" + name + "): " + e); }
+    if (String(pkg.id).length !== 8) {
+        throw "CreatePackage produced invalid package id '" + pkg.id + "' (FairyGUI encoded URLs require 8 characters)";
+    }
+    return ok({ id: pkg.id, name: pkg.name, basePath: pkg.basePath });
+};
+
+// Write one complete component XML in a single call: text, list, defaultItem,
+// controllers and gears are all in that XML. Closes an open document first so
+// a later save_all cannot overwrite the file with stale editor memory.
+COMMANDS.write_component = function (a) {
+    if (!a.xml || typeof a.xml !== "string") throw "args.xml required (full <component> XML)";
+    var xml = String(a.xml).replace(/^\uFEFF/, "");
+    if (xml.indexOf("<component") < 0 || xml.indexOf("</component>") < 0) {
+        throw "args.xml must be a full <component>...</component> document";
+    }
+    var pkg = getPkg(a.pkg);
+    if (String(pkg.id).length !== 8) itemUrl(pkg, { id: "" });
+    var baseName = componentBaseName(a.name);
+    if (!baseName) throw "args.name required";
+    var item = findComponentItem(pkg, baseName);
+    var created = false;
+    if (item == null) {
+        var size = parseComponentSize(xml);
+        var width = a.width > 0 ? (a.width | 0) : (size.width | 0);
+        var height = a.height > 0 ? (a.height | 0) : (size.height | 0);
+        if (!(width > 0 && height > 0)) throw "component size missing; set <component size=\"w,h\"> or args.width/height";
+        var path = normalizeFolder(a.path);
+        if (path) {
+            try { pkg.EnsurePathExists(path, true); } catch (e1) {
+                try { pkg.CreatePath(path); } catch (e2) { throw "failed to create folder " + path + ": " + e1; }
+            }
+        }
+        var exported = a.exported === undefined ? true : !!a.exported;
+        var ext = a.extention ? String(a.extention) : parseExtention(xml);
+        item = pkg.CreateComponentItem(baseName, width, height, path, ext, exported, false);
+        if (item == null) throw "CreateComponentItem returned null for " + baseName;
+        pkg.Save();
+        created = true;
+    } else if (String(item.type).toLowerCase() !== "component") {
+        throw "item exists but is not a component: " + baseName + " (" + item.type + ")";
+    }
+    var doc = App.docView.FindDocument(itemUrl(pkg, item));
+    if (doc != null) App.docView.CloseDocument(doc);
+    if (!item.file) throw "component has no file path: " + baseName;
+    writeUtf8(String(item.file), xml);
+    return ok({
+        id: item.id,
+        name: item.name,
+        url: itemUrl(pkg, item),
+        file: item.file,
+        created: created,
+        refreshRequired: true
+    });
+};
+
+function componentBaseName(name) {
+    var n = name ? String(name) : "";
+    if (n.length > 4 && n.slice(-4).toLowerCase() === ".xml") n = n.slice(0, -4);
+    return n;
+}
+
+function findComponentItem(pkg, baseName) {
+    var it = findItem(pkg, baseName);
+    if (it == null) it = findItem(pkg, baseName + ".xml");
+    return it;
+}
+
+function parseComponentSize(xml) {
+    var m = /<component\b[^>]*\bsize="(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)"/.exec(xml);
+    if (!m) return { width: 0, height: 0 };
+    return { width: parseFloat(m[1]), height: parseFloat(m[2]) };
+}
+
+function parseExtention(xml) {
+    var m = /<component\b[^>]*\bextention="([^"]*)"/.exec(xml);
+    if (!m || !m[1]) return null;
+    return m[1];
+}
+
+function normalizeFolder(path) {
+    if (!path) return null;
+    var p = String(path).replace(/\\/g, "/");
+    if (!p || p === "/") return null;
+    if (p.charAt(0) !== "/") p = "/" + p;
+    if (p.charAt(p.length - 1) !== "/") p = p + "/";
+    return p;
+}
+
+function writeUtf8(path, text) {
+    try {
+        var enc = new CS.System.Text.UTF8Encoding(false);
+        CS.System.IO.File.WriteAllText(path, text, enc);
+    } catch (e) {
+        CS.System.IO.File.WriteAllText(path, text);
+    }
+}
 
 COMMANDS.delete_item = function (a) {
     var pkg = getPkg(a.pkg);

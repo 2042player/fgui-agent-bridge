@@ -38,6 +38,10 @@ const TOOLS = {
         description: "List all UI packages (id, name, basePath) in the project.",
         inputSchema: obj({}),
     },
+    create_package: {
+        description: "Create a UI package in the open project (FProject.CreatePackage). The editor assigns the 8-character package id.",
+        inputSchema: obj({ name: { type: S("string"), description: "new package name" } }, ["name"]),
+    },
     list_items: {
         description:
             "List the resource tree of a package: components, images, fonts with ids/paths. " +
@@ -80,12 +84,42 @@ const TOOLS = {
             ["pkg", "name", "width", "height"],
         ),
     },
+    write_component: {
+        description:
+            "Create or replace one component from a full <component> XML string in a single call. " +
+            "Use this for text, list/defaultItem, controllers, and gearDisplay/gearText/gearIcon. " +
+            "Image src ids must already exist in the package. Closes the editor document before writing. " +
+            "Call refresh once after a batch, then read_component to verify. Does not publish.",
+        inputSchema: obj(
+            {
+                pkg: { type: S("string") },
+                name: { type: S("string"), description: "component name without .xml" },
+                xml: { type: S("string"), description: "full component XML, including <displayList>" },
+                path: { type: S("string"), description: "folder inside the package when creating, e.g. Comp or Page" },
+                width: { type: S("number"), description: "used only when xml has no size attribute" },
+                height: { type: S("number"), description: "used only when xml has no size attribute" },
+                extention: { type: S("string"), description: "Button/Label/... when creating; omit to read extention from xml" },
+                exported: { type: S("boolean") },
+            },
+            ["pkg", "name", "xml"],
+        ),
+    },
     delete_item: {
         description: "Delete a resource item from a package (use with care).",
         inputSchema: obj({ pkg: { type: S("string") }, name: { type: S("string") } }, ["pkg", "name"]),
     },
     list_children: {
         description: "Open a component and list its stage children (name/id/type).",
+        inputSchema: obj({ pkg: { type: S("string") }, name: { type: S("string") } }, ["pkg", "name"]),
+    },
+    open_doc: {
+        description: "Open a component document in the editor.",
+        inputSchema: obj({ pkg: { type: S("string") }, name: { type: S("string") } }, ["pkg", "name"]),
+    },
+    close_doc: {
+        description:
+            "Close a component document without saving editor memory over the file. " +
+            "write_component does this itself. Call it before any out-of-band XML edit.",
         inputSchema: obj({ pkg: { type: S("string") }, name: { type: S("string") } }, ["pkg", "name"]),
     },
     insert_object: {
@@ -205,7 +239,7 @@ rl.on("line", async (line) => {
                 result: {
                     protocolVersion: "2024-11-05",
                     capabilities: { tools: {} },
-                    serverInfo: { name: "fgui-agent-bridge", version: "0.2.0" },
+                    serverInfo: { name: "fgui-agent-bridge", version: "0.3.0" },
                 },
             });
         } else if (req.method === "tools/list") {

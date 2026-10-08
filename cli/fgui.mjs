@@ -155,8 +155,8 @@ usage: fgui <command> ['{"json":"args"}']
 bridge: ${BASE}
 
 commands are forwarded verbatim to the editor plugin, e.g.:
-  ping | project-info | list-packages | list-items | read-component
-  create-component | delete-item | open-doc | close-doc | list-children
+  ping | project-info | list-packages | create-package | list-items | read-component
+  create-component | write-component | delete-item | open-doc | close-doc | list-children
   insert-object | set-property | remove-object | save-all | refresh
   publish | screenshot | bridge-log
 
