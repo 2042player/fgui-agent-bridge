@@ -14,7 +14,7 @@
 // Protocol: POST with JSON body  {"cmd": "<command>", "args": {...}}
 // Response: JSON {"ok": true, "data": ...} or {"ok": false, "error": "..."}
 
-var VERSION = "0.3.0";
+var VERSION = "0.4.0";
 
 var FairyGUI = CS.FairyGUI;
 var FairyEditor = CS.FairyEditor;
@@ -389,6 +389,239 @@ COMMANDS.insert_object = function (a) {
     App.docView.SaveDocument(r.doc);
     return ok({ inserted: obj.name, url: url });
 };
+
+// Primitives (text, list, loader) are not library items. CreateChild runs on the
+// open document's component, then SaveDocument persists that document.
+COMMANDS.insert_text = function (a) {
+    var opened = ensureDocOpen(getPkg(a.pkg), a.name);
+    var attrs = {
+        name: childName(a),
+        xy: xyAttr(a),
+        size: sizeAttr(a),
+        text: a.text,
+        fontSize: numAttr(a.fontSize),
+        color: colorAttr(a.color),
+        align: a.align,
+        vAlign: a.vAlign,
+        autoSize: a.autoSize,
+        strokeColor: colorAttr(a.strokeColor),
+        strokeSize: numAttr(a.strokeSize)
+    };
+    if (a.bold) attrs.bold = "true";
+    if (a.singleLine) attrs.singleLine = "true";
+    var obj = createOnDoc(opened.doc, "text", attrs, null);
+    return finishChild(opened.doc, obj, a);
+};
+
+COMMANDS.insert_loader = function (a) {
+    var pkg = getPkg(a.pkg);
+    var opened = ensureDocOpen(pkg, a.name);
+    var attrs = {
+        name: childName(a),
+        xy: xyAttr(a),
+        size: sizeAttr(a),
+        url: resolveRefUrl(pkg, a.refPkg, a.refName || a.ref_name, a.url),
+        align: a.align,
+        vAlign: a.vAlign,
+        fill: a.fill
+    };
+    var obj = createOnDoc(opened.doc, "loader", attrs, null);
+    return finishChild(opened.doc, obj, a);
+};
+
+COMMANDS.insert_list = function (a) {
+    var pkg = getPkg(a.pkg);
+    var opened = ensureDocOpen(pkg, a.name);
+    var layout = listLayout(a.layout);
+    var attrs = {
+        name: childName(a),
+        xy: xyAttr(a),
+        size: sizeAttr(a),
+        overflow: a.overflow || "hidden",
+        layout: layout,
+        lineGap: numAttr(a.lineGap),
+        colGap: numAttr(a.colGap),
+        lineItemCount: numAttr(a.lineItemCount),
+        defaultItem: (a.defaultItem || a.url || a.refName || a.ref_name)
+            ? resolveRefUrl(pkg, a.refPkg || a.ref_pkg, a.defaultItem || a.refName || a.ref_name, a.url)
+            : null
+    };
+    var inner = "";
+    var items = a.items || [];
+    for (var i = 0; i < items.length; i++) {
+        var it = items[i] || {};
+        var icon = it.icon || it.url || null;
+        if (icon && String(icon).indexOf("ui://") !== 0) {
+            icon = resolveRefUrl(pkg, it.refPkg || a.refPkg, it.icon || it.refName, null);
+        }
+        inner += tagXml("item", { name: it.name, title: it.title, icon: icon }, true);
+    }
+    var obj = createOnDoc(opened.doc, "list", attrs, inner);
+    return finishChild(opened.doc, obj, a);
+};
+
+COMMANDS.add_controller = function (a) {
+    var opened = ensureDocOpen(getPkg(a.pkg), a.name);
+    var controller = a.controller ? String(a.controller) : "";
+    if (!controller) throw "args.controller required";
+    var pages = a.pages;
+    if (!pages || !pages.length) throw "args.pages required (array of page names)";
+    var selected = a.selected === undefined ? 0 : (a.selected | 0);
+    var xml = editorXml(tagXml("controller", {
+        name: controller,
+        pages: controllerPagesAttr(pages),
+        selected: String(selected)
+    }, true));
+    opened.doc.AddController(xml);
+    try { opened.doc.SetModified(true); } catch (e) { }
+    App.docView.SaveDocument(opened.doc);
+    return ok({ controller: controller, pages: pages.length, selected: selected });
+};
+
+COMMANDS.set_gear = function (a) {
+    var opened = ensureDocOpen(getPkg(a.pkg), a.name);
+    var target = a.target ? findChild(opened.doc.content, a.target) : null;
+    if (target == null) throw "target not found: " + a.target;
+    if (target.docElement == null) throw "target has no docElement: " + a.target;
+    var gear = String(a.gear || "");
+    var tag = gearTag(gear);
+    var pkg = getPkg(a.pkg);
+    var values = a.values;
+    var valueAttr = null;
+    if (values && values.length) {
+        var parts = [];
+        for (var i = 0; i < values.length; i++) {
+            var v = values[i];
+            if (gear === "icon" && v && String(v).indexOf("ui://") !== 0) {
+                v = resolveRefUrl(pkg, a.refPkg, v, null);
+            }
+            parts.push(v == null ? "" : String(v));
+        }
+        valueAttr = parts.join("|");
+    }
+    var gearXml = tagXml(tag, {
+        controller: a.controller,
+        pages: pagesAttr(a.pages),
+        values: valueAttr
+    }, true);
+    target.docElement.UpdateGears(editorXml("<root>" + gearXml + "</root>"));
+    try { opened.doc.SetModified(true); } catch (e2) { }
+    App.docView.SaveDocument(opened.doc);
+    return ok({ target: a.target, gear: gear, controller: a.controller });
+};
+
+function childName(a) {
+    return a.child || a.objectName || null;
+}
+
+function numAttr(v) {
+    if (v === undefined || v === null || v === "") return null;
+    return String(v);
+}
+
+function colorAttr(c) {
+    if (!c) return null;
+    var s = String(c);
+    if (s.charAt(0) !== "#") s = "#" + s;
+    return s;
+}
+
+function xyAttr(a) {
+    if (a.x === undefined || a.y === undefined) return null;
+    return (a.x + 0) + "," + (a.y + 0);
+}
+
+function sizeAttr(a) {
+    if (a.width === undefined || a.height === undefined) return null;
+    return (a.width + 0) + "," + (a.height + 0);
+}
+
+function listLayout(layout) {
+    if (!layout) return null;
+    var s = String(layout);
+    if (s === "单列" || s === "single_column" || s === "column") return null;
+    if (s === "横向" || s === "row") return "row";
+    if (s === "流式" || s === "flow" || s === "flow_hz") return "flow_hz";
+    if (s === "flow_vt" || s === "竖向流式") return "flow_vt";
+    if (s === "pagination") return "pagination";
+    return s;
+}
+
+function pagesAttr(pages) {
+    if (pages == null) return null;
+    if (typeof pages === "string") return pages;
+    if (!pages.length) return null;
+    return pages.join(",");
+}
+
+function controllerPagesAttr(pages) {
+    if (typeof pages === "string") return pages;
+    var parts = [];
+    for (var i = 0; i < pages.length; i++) {
+        parts.push(String(i));
+        parts.push(String(pages[i]));
+    }
+    return parts.join(",");
+}
+
+function gearTag(gear) {
+    if (gear === "display" || gear === "gearDisplay") return "gearDisplay";
+    if (gear === "text" || gear === "gearText") return "gearText";
+    if (gear === "icon" || gear === "gearIcon") return "gearIcon";
+    throw "args.gear must be display, text, or icon";
+}
+
+function xmlEscape(s) {
+    return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+}
+
+function tagXml(tag, attrs, selfClose) {
+    var parts = ["<" + tag];
+    for (var k in attrs) {
+        if (attrs[k] === undefined || attrs[k] === null || attrs[k] === "") continue;
+        parts.push(" " + k + "=\"" + xmlEscape(attrs[k]) + "\"");
+    }
+    parts.push(selfClose ? "/>" : ">");
+    return parts.join("");
+}
+
+function editorXml(s) {
+    return new FairyGUI.Utils.XML(s);
+}
+
+function createOnDoc(doc, tag, attrs, inner) {
+    var xml = inner ? (tagXml(tag, attrs, false) + inner + "</" + tag + ">") : tagXml(tag, attrs, true);
+    var obj = doc.content.CreateChild(editorXml(xml));
+    if (obj == null) throw "CreateChild returned null for <" + tag + ">";
+    return obj;
+}
+
+function finishChild(doc, obj, a) {
+    if (a.index !== undefined) doc.content.SetChildIndex(obj, a.index | 0);
+    if (a.props) applyProps(obj, a.props);
+    try { doc.SetModified(true); } catch (e) { }
+    App.docView.SaveDocument(doc);
+    var out = { name: obj.name };
+    try { out.id = obj.id; } catch (e2) { }
+    try { out.objType = obj.objType; } catch (e3) { }
+    return ok(out);
+}
+
+function resolveRefUrl(currentPkg, refPkgName, refName, url) {
+    if (url && String(url).indexOf("ui://") === 0) return String(url);
+    var name = refName || (url ? String(url) : "");
+    if (!name) throw "url or refName required";
+    var refPkg = refPkgName ? getPkg(refPkgName) : currentPkg;
+    var item = findItem(refPkg, name);
+    if (item == null) item = findItem(refPkg, componentBaseName(name));
+    if (item == null) item = findItem(refPkg, componentBaseName(name) + ".xml");
+    if (item == null) throw "resource not found: " + name;
+    return itemUrl(refPkg, item);
+}
 
 COMMANDS.set_property = function (a) {
     var pkg = getPkg(a.pkg);

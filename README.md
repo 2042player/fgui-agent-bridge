@@ -89,7 +89,7 @@ node cli/fgui.mjs publish '{"pkg":"common"}'
 }
 ```
 
-AI 的典型制作循环：`list_items` 找素材 → `write_component` 一次写入整个组件（文本、列表、控制器都在这份 XML 里）→ 一批写完后 `refresh` → `read_component` 核对。改一个已有元件的坐标仍可用 `insert_object` / `set_property`。`publish` 出包后由游戏侧加载验证。
+AI 的典型制作循环：`list_items` 找素材 → `create_component` → 按对象调用编辑器命令（`insert_object` 放图和组件，`insert_text` 建文本，`insert_list` 建列表，`add_controller` / `set_gear` 建控制器和 gear）→ `save_all`。不要把整份组件 XML 写进文件。`publish` 出包后由游戏侧加载验证。
 
 ## 命令参考
 
@@ -104,9 +104,13 @@ AI 的典型制作循环：`list_items` 找素材 → `write_component` 一次�
 | `read_component` | `pkg`, `name` | 组件 XML 源码（编辑前先读，了解子对象命名） |
 | `create_package` | `name` | 在当前工程新建包；包 id 由编辑器分配，必须是 8 位 |
 | `create_component` | `pkg`, `name`, `width`, `height`, `path?`, `extention?`, `exported?` | 新建组件；`extention` 可为 Button/Label/ProgressBar/Slider/ComboBox/List/Tree 等 |
-| `write_component` | `pkg`, `name`, `xml`, `path?`, `width?`, `height?`, `extention?`, `exported?` | 一次写入整个组件 XML（文本、列表、`defaultItem`、控制器、gear）。会先关掉已打开的文档。一批写完后调用一次 `refresh`，再用 `read_component` 核对 |
 | `delete_item` | `pkg`, `name` | 删除资源（慎用） |
-| `open_doc` / `close_doc` | `pkg`, `name` | 打开/关闭组件文档。MCP 与插件都提供。`write_component` 写之前会自己 `close_doc` |
+| `insert_text` | `pkg`, `name`, `child`, `text?`, `x?`, `y?`, `width?`, `height?`, `fontSize?`, `color?`, `strokeColor?`, `strokeSize?` | 在打开的组件上新建文本（`CreateChild` + 保存） |
+| `insert_loader` | `pkg`, `name`, `child`, `url` 或 `refName`, `x?`, `y?`, `width?`, `height?` | 新建装载器 |
+| `insert_list` | `pkg`, `name`, `child`, `defaultItem?`, `layout?`, `lineGap?`, `colGap?`, `items?` | 新建列表并设置 `defaultItem`。`layout`：`single_column` / `row` / `flow_hz` |
+| `add_controller` | `pkg`, `name`, `controller`, `pages`, `selected?` | 给组件加控制器。`pages` 是页面名称数组 |
+| `set_gear` | `pkg`, `name`, `target`, `gear`, `controller`, `pages?`, `values?` | 给子节点设置 `gearDisplay` / `gearText` / `gearIcon`。`gear` 取 `display`、`text`、`icon` |
+| `open_doc` / `close_doc` | `pkg`, `name` | 打开/关闭组件文档。MCP 与插件都提供 |
 | `list_children` | `pkg`, `name` | 舞台子对象列表 |
 | `insert_object` | `pkg`, `name`, `url` 或 `ref_pkg`+`ref_name`, `x?`, `y?`, `index?`, `props?` | 插入库内元件（组件/图片等）到舞台 |
 | `set_property` | `pkg`, `name`, `target?`, `props` | 改属性（官方 API，可撤销）；`target` 支持 `a/b` 路径，缺省为组件根 |

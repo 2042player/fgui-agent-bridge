@@ -84,26 +84,6 @@ const TOOLS = {
             ["pkg", "name", "width", "height"],
         ),
     },
-    write_component: {
-        description:
-            "Create or replace one component from a full <component> XML string in a single call. " +
-            "Use this for text, list/defaultItem, controllers, and gearDisplay/gearText/gearIcon. " +
-            "Image src ids must already exist in the package. Closes the editor document before writing. " +
-            "Call refresh once after a batch, then read_component to verify. Does not publish.",
-        inputSchema: obj(
-            {
-                pkg: { type: S("string") },
-                name: { type: S("string"), description: "component name without .xml" },
-                xml: { type: S("string"), description: "full component XML, including <displayList>" },
-                path: { type: S("string"), description: "folder inside the package when creating, e.g. Comp or Page" },
-                width: { type: S("number"), description: "used only when xml has no size attribute" },
-                height: { type: S("number"), description: "used only when xml has no size attribute" },
-                extention: { type: S("string"), description: "Button/Label/... when creating; omit to read extention from xml" },
-                exported: { type: S("boolean") },
-            },
-            ["pkg", "name", "xml"],
-        ),
-    },
     delete_item: {
         description: "Delete a resource item from a package (use with care).",
         inputSchema: obj({ pkg: { type: S("string") }, name: { type: S("string") } }, ["pkg", "name"]),
@@ -117,10 +97,122 @@ const TOOLS = {
         inputSchema: obj({ pkg: { type: S("string") }, name: { type: S("string") } }, ["pkg", "name"]),
     },
     close_doc: {
-        description:
-            "Close a component document without saving editor memory over the file. " +
-            "write_component does this itself. Call it before any out-of-band XML edit.",
+        description: "Close a component document. Call it before any out-of-band edit of that component's XML file.",
         inputSchema: obj({ pkg: { type: S("string") }, name: { type: S("string") } }, ["pkg", "name"]),
+    },
+    insert_text: {
+        description:
+            "Create a text field on a component through the editor API (CreateChild + SaveDocument). " +
+            "One call per text. child is the object name (txt + business name).",
+        inputSchema: obj(
+            {
+                pkg: { type: S("string") },
+                name: { type: S("string"), description: "target component" },
+                child: { type: S("string"), description: "new text object name" },
+                text: { type: S("string") },
+                x: { type: S("number") },
+                y: { type: S("number") },
+                width: { type: S("number") },
+                height: { type: S("number") },
+                fontSize: { type: S("number") },
+                color: { type: S("string") },
+                align: { type: S("string") },
+                vAlign: { type: S("string") },
+                autoSize: { type: S("string") },
+                bold: { type: S("boolean") },
+                strokeColor: { type: S("string") },
+                strokeSize: { type: S("number") },
+                singleLine: { type: S("boolean") },
+                index: { type: S("number") },
+                props: { type: S("object") },
+            },
+            ["pkg", "name", "child"],
+        ),
+    },
+    insert_loader: {
+        description:
+            "Create a loader on a component through the editor API. url or refName selects the image.",
+        inputSchema: obj(
+            {
+                pkg: { type: S("string") },
+                name: { type: S("string") },
+                child: { type: S("string") },
+                url: { type: S("string"), description: "ui:// url" },
+                refPkg: { type: S("string") },
+                refName: { type: S("string"), description: "library item name when url is omitted" },
+                x: { type: S("number") },
+                y: { type: S("number") },
+                width: { type: S("number") },
+                height: { type: S("number") },
+                align: { type: S("string") },
+                vAlign: { type: S("string") },
+                fill: { type: S("string") },
+                index: { type: S("number") },
+                props: { type: S("object") },
+            },
+            ["pkg", "name", "child"],
+        ),
+    },
+    insert_list: {
+        description:
+            "Create a list on a component through the editor API. defaultItem is a component name or ui:// url. " +
+            "layout: single_column, row, flow_hz, flow_vt. items are optional preview rows {title, icon}.",
+        inputSchema: obj(
+            {
+                pkg: { type: S("string") },
+                name: { type: S("string") },
+                child: { type: S("string") },
+                x: { type: S("number") },
+                y: { type: S("number") },
+                width: { type: S("number") },
+                height: { type: S("number") },
+                defaultItem: { type: S("string"), description: "item component name or ui:// url" },
+                refPkg: { type: S("string") },
+                layout: { type: S("string") },
+                lineGap: { type: S("number") },
+                colGap: { type: S("number") },
+                lineItemCount: { type: S("number") },
+                overflow: { type: S("string") },
+                items: { type: S("array"), description: "preview items: {title, icon}" },
+                index: { type: S("number") },
+                props: { type: S("object") },
+            },
+            ["pkg", "name", "child"],
+        ),
+    },
+    add_controller: {
+        description:
+            "Add a controller to the open component through Document.AddController. " +
+            "pages is an array of page names. selected is the page index.",
+        inputSchema: obj(
+            {
+                pkg: { type: S("string") },
+                name: { type: S("string") },
+                controller: { type: S("string") },
+                pages: { type: S("array"), items: { type: S("string") } },
+                selected: { type: S("number") },
+            },
+            ["pkg", "name", "controller", "pages"],
+        ),
+    },
+    set_gear: {
+        description:
+            "Set gearDisplay, gearText, or gearIcon on a child through DocElement.UpdateGears. " +
+            "gear is display, text, or icon. pages are controller page ids. " +
+            "values is required for text and icon (icon values may be resource names).",
+        inputSchema: obj(
+            {
+                pkg: { type: S("string") },
+                name: { type: S("string") },
+                target: { type: S("string"), description: "child name" },
+                gear: { type: S("string"), description: "display, text, or icon" },
+                controller: { type: S("string") },
+                pages: { type: S("array"), items: { type: S("string") } },
+                values: { type: S("array"), items: { type: S("string") } },
+                refPkg: { type: S("string") },
+            },
+            ["pkg", "name", "target", "gear", "controller"],
+        ),
     },
     insert_object: {
         description:
@@ -239,7 +331,7 @@ rl.on("line", async (line) => {
                 result: {
                     protocolVersion: "2024-11-05",
                     capabilities: { tools: {} },
-                    serverInfo: { name: "fgui-agent-bridge", version: "0.3.0" },
+                    serverInfo: { name: "fgui-agent-bridge", version: "0.4.0" },
                 },
             });
         } else if (req.method === "tools/list") {
